@@ -49,6 +49,8 @@ pod2usage(-verbose => 99, -sections => 'USAGE|EXAMPLES|OPTIONS')
 pod2usage(-verbose => 2) if $config{man};
 
 $config{editor_height} += 2;    # consider the border...
+$config{env} //= path($config{commands_dir})->child('env')
+   if path($config{commands_dir});
 
 my $commands = [];
 push $commands->@*, read_commands($config{commands})
