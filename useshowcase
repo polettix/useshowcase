@@ -427,7 +427,9 @@ disable compatibility mode and try to show better window borders.
 =item C<-e|--env|--env-file filename>
 
 set filename of the environment file. If not present, a temporary file
-will be created and removed upon exit.
+will be created and removed upon exit. By default, if the
+C<-d|--commands-dir> option is provided, file named C<env> inside that
+directory is considered.
 
 =item C<-E|--editor-height integer>
 
