@@ -1,0 +1,255 @@
+#!/usr/bin/env perl
+use 5.024;
+use warnings;
+use experimental qw< postderef signatures >;
+no warnings qw< experimental::postderef experimental::signatures >;
+use Getopt::Long qw< :config gnu_getopt >;
+use POSIX 'strftime';
+use FindBin '$Bin';
+use lib "$Bin/local/lib/perl5";
+use autodie ':default';
+use Path::Tiny;
+use Curses::UI;
+use Curses;
+use YAML qw< LoadFile Dump >;
+use Data::Dumper;
+$Data::Dumper::Indent = 1;
+
+my $ts = strftime('%Y%m%d-%H%M%S', localtime);
+my %config = (
+   commands      => 'commands.usc',
+   commands_dir  => '',
+   compat        => 1,
+   editor_height => 4,
+   env           => undef,
+   history       => "useshowcase-history-$ts.txt",
+   shell         => '/bin/sh',
+);
+GetOptions(
+   \%config,
+   qw<
+     commands|c=s
+     commands_dir|commands-dir|d=s
+     compat!
+     editor_height|editor-height|E=i
+     env|env-file|e=s
+     history|H=s
+     shell|s=s
+     >
+) or die "whatever\n";
+
+$config{editor_height} += 2;    # consider the border...
+
+my $commands = [];
+push $commands->@*, read_commands($config{commands})
+  if -r $config{commands};
+push $commands->@*, acquire_commands($config{commands_dir})
+  if -d $config{commands_dir};
+push $commands->@*, default_commands(\%config);
+
+my $buttons_height = 0;
+
+my $cui = Curses::UI->new(
+   -color_support => 1,
+   -compat        => $config{compat},
+);
+my $win = $cui->add('window_id', 'Window');
+
+my ($editor, $list, $buttons, @history);
+$list = $win->add(
+   'mylistbox',
+   'Listbox',
+   -htmltext => 1,
+   -height   => $win->height - $config{editor_height} - $buttons_height,
+   -border   => 1,
+   -values   => [0 .. $#$commands],
+   -labels   => {map { $_ => $commands->[$_]{label} } 0 .. $#$commands},
+   -onchange => sub ($lb) {
+      my $i      = $lb->get;
+      my $item   = $commands->[$i];
+      my $action = $item->{action};
+
+      if ($action eq 'quit') { exit 0 }
+      elsif ($action eq 'save-history') {
+         open my $fh, '>', $config{history};
+         for my $i (0 .. $#history) {
+            say {$fh} '# ', $i + 1, ' ', '#' x (69 - length $i);
+            say {$fh} $history[$i];
+         }
+         close $fh;
+      } ## end elsif ($action eq 'save-history')
+      elsif ($action eq 'save') {
+         save_commands($commands);
+      }
+      elsif ($action eq 'execute') {
+         (my $has_env = $config{env}{command}) =~ s{\s+}{}gmxs;
+         my $cmd = ($has_env ? $config{env}{command} . "\n" : '')
+            . $item->{command};
+         push @history, $cmd;
+         $cui->leave_curses;
+         say '#' x 72;
+         say "# $_" for split m{\n}mxs, $cmd;
+         say '#' x 42;
+         system $config{shell}, '-c', $cmd;
+         scalar <STDIN>;
+         $cui->reset_curses;
+      } ## end elsif ($action eq 'execute')
+      elsif ($action eq 'separator') { }
+      elsif ($action eq 'env') { }
+      else {
+         die "unsupported command\n";
+      }
+      $lb->clear_selection;
+   },
+   -onselchange => sub ($lb) {
+      my $line = eval { $commands->[$lb->get_active_id] };
+      $editor->text(displayable_command($line));
+   },
+   -onfocus => sub ($lb) {
+      my $line = eval { $commands->[$lb->get_active_id] };
+      if ($line->{action} eq 'env') { # should I update the env file?
+         if ($line->{command} ne $line->{previous}) {
+            save_file($line->{path}, $line->{command});
+            $line->{previous} = $line->{command};
+         }
+      }
+   },
+   -wraparound => 1,
+);
+$list->set_binding(sub { exit 0 }, 'q', 'Q');
+$editor = $win->add(
+   'myeditor',
+   'TextEditor',
+   -text   => displayable_command($commands->[0]),
+   -y      => $win->height - $config{editor_height} - $buttons_height,
+   -height => $config{editor_height},
+   -border => 1,
+   -onfocus => sub ($ed) {
+      my $line = eval { $commands->[$list->get_active_id] };
+      $list->focus unless grep {$line->{action} eq $_} qw< env execute >;
+   },
+   -onblur => sub ($ed) {
+      my $index   = $list->get_active_id;
+      my $command = $commands->[$index];
+      if ($command->{action} eq 'execute') {
+         $command->{command} = $ed->get;
+      }
+      elsif ($command->{action} eq 'env') {
+         for ($command->{command}) {
+            $_ = $ed->get // '';
+            $_ .= "\n" if length $_ < 1 || substr($_, -1, 1) ne "\n";
+         }
+      }
+   },
+);
+
+#$buttons = $win->add('mybuttons', 'Buttonbox',
+#   -border => 1,
+#   -y => $win->height - 3,
+#   -buttons => [
+#      { -label => 'Quit', -value => 'quit' },
+#      { -label => 'Save History', -value => 'save-history' },
+#      { -label => 'Save', -value => 'save' },
+#   ]
+#);
+$list->focus;
+$cui->mainloop;
+exit 0;
+
+sub displayable_command ($command) {
+   return '' unless grep { $command->{action} eq $_ } qw< env execute >;
+   return $command->{command};
+}
+
+sub normalize_command ($item, %additions) {
+   if (scalar(keys $item->%*) == 1) {    # normalize...
+      my ($label, $command) = $item->%*;
+      $item = {
+         label   => $label,
+         action  => 'execute',
+         command => $command,
+      };
+   } ## end if (scalar(keys $item->...))
+   $item->%* = ($item->%*, %additions);
+   $item->{previous} = $item->{command} if exists $item->{command};
+   return $item;
+} ## end sub normalize_command
+
+sub read_commands ($filename) {
+   $filename = \*STDIN if $filename eq '-';
+   my $commands = LoadFile($filename);
+   $filename = ref($filename) eq 'GLOB' ? undef : path($filename);
+   return
+     map { normalize_command($_, src => 'yaml', path => $filename) }
+     $commands->@*;
+} ## end sub read_commands ($filename)
+
+sub save_commands ($commands) {
+   my (@to_yaml, $save_yaml);
+   for my $command ($commands->@*) {
+      my $src = $command->{src} //= 'ignore';
+      if ($src eq 'yaml') {
+         push @to_yaml, {$command->{label} => $command->{command}};
+         ($command->{previous}, $save_yaml) =
+           $command->@{qw< command path >}
+           if $command->{previous} ne $command->{command};
+      } ## end if ($src eq 'yaml')
+      elsif ($src eq 'script') {
+         if ($command->{previous} ne $command->{command}) {
+            save_file($command->{path}, $command->{command});
+            $command->{previous} = $command->{command};
+         }
+      } ## end elsif ($src eq 'script')
+   } ## end for my $command ($commands...)
+   save_file($save_yaml, Dump(\@to_yaml));
+
+   return;
+} ## end sub save_commands ($commands)
+
+sub save_file ($path, $contents) {
+   return unless defined $path;
+   my $tmp = path($path . '.new');
+   $tmp->spew($contents);
+   $tmp->move($path);
+   return;
+} ## end sub save_file
+
+sub acquire_commands ($dirname) {
+   map {
+      if (!$_->is_dir && m{\.sh$}mxs) {
+         (my $label = $_->basename) =~ s{\A\d+[-\s]|\.sh\z}{}gmxs;
+         normalize_command(
+            {
+               label   => $label,
+               action  => 'execute',
+               command => $_->slurp,
+               src     => 'script',
+               path    => $_,
+            }
+         );
+      } ## end if (!$_->is_dir && m{\.sh$}mxs)
+      else { () }
+   } sort {$a cmp $b} path($dirname)->children;
+} ## end sub acquire_commands ($dirname)
+
+sub default_commands ($config) {
+   my $env = path($config->{env} // Path::Tiny->tempfile);
+   $env->touch;
+   $config->{env} = {
+      label => 'common environment',
+      action => 'env',
+      path   => $env,
+      command => $env->slurp,
+   };
+   return map {
+      $_->{label} = "<bold>$_->{label}</bold>"
+        if length $_->{label};
+      normalize_command($_)
+   } (
+      {label => '',                           action => 'separator'},
+      $config->{env},
+      {label => 'save history',               action => 'save-history'},
+      {label => 'save updated commands file', action => 'save'},
+      {label => '[q]uit',                     action => 'quit'},
+   );
+} ## end sub default_commands

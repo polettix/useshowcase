@@ -1,0 +1,3 @@
+---
+- 'contents of root, by date descending': ls -lart /
+- some trivial message: echo 'what to do about this'
