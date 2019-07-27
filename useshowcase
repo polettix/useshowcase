@@ -3,6 +3,7 @@ use 5.024;
 use warnings;
 use experimental qw< postderef signatures >;
 no warnings qw< experimental::postderef experimental::signatures >;
+use Pod::Usage qw< pod2usage >;
 use Getopt::Long qw< :config gnu_getopt >;
 use POSIX 'strftime';
 use FindBin '$Bin';
@@ -14,6 +15,8 @@ use Curses;
 use YAML qw< LoadFile Dump >;
 use Data::Dumper;
 $Data::Dumper::Indent = 1;
+
+my $VERSION = '0.1';
 
 my $ts = strftime('%Y%m%d-%H%M%S', localtime);
 my %config = (
@@ -28,6 +31,7 @@ my %config = (
 GetOptions(
    \%config,
    qw<
+     usage! help! man! version!
      commands|c=s
      commands_dir|commands-dir|d=s
      compat!
@@ -36,7 +40,13 @@ GetOptions(
      history|H=s
      shell|s=s
      >
-) or die "whatever\n";
+) or pod2usage(-verbose => 99, -sections => 'USAGE');
+pod2usage(message => "$0 $VERSION", -verbose => 99, -sections => ' ')
+  if $config{version};
+pod2usage(-verbose => 99, -sections => 'USAGE') if $config{usage};
+pod2usage(-verbose => 99, -sections => 'USAGE|EXAMPLES|OPTIONS')
+  if $config{help};
+pod2usage(-verbose => 2) if $config{man};
 
 $config{editor_height} += 2;    # consider the border...
 
@@ -253,3 +263,209 @@ sub default_commands ($config) {
       {label => '[q]uit',                     action => 'quit'},
    );
 } ## end sub default_commands
+
+__END__
+
+=encoding UTF-8
+
+=head1 NAME
+
+useshowcase - showcase use cases
+
+=head1 USAGE
+
+   useshowcase [--usage] [--help] [--man] [--version]
+
+   useshowcase [-c|--commands filename]
+               [-d|--commands-dir dirname]
+               [--no-compat]
+               [-e|--env|--env-file filename]
+               [-E|--editor-height integer]
+               [-H|--history filename]
+               [-s|--shell filename]
+
+=head1 EXAMPLES
+
+   $ useshowcase -c my-commands.yml -d other-commands/ -s /bin/bash
+
+=head1 DESCRIPTION
+
+This program allows you easily access a few pre-defined shell commands or
+groups of commands that you might want to run for showing a few use cases.
+This is meant as an improvement over repeated usage of the command history
+in this specific cases, as well as a way to provide a label to the actions
+that you execute and make your audience follow you in some easier way.
+
+=head2 Commands File
+
+Commands to be shown in the list can be taken from a YAML file, by default
+C<commands.usc> (no error is raised if this file is missing). The file can
+be set with option C<-c|--commands>.
+
+This is a YAML file with a very simple structure:
+
+=over
+
+=item *
+
+the top level is an array
+
+=item *
+
+each entry in the array is an object with a single key/value pair, where
+the key is the labe shown in the list of commands, and the value is the
+actual command that will be run.
+
+=back
+
+Example:
+
+   ---
+   - 'contents of root, by date descending': ls -lart /
+   - 'some trivial message': echo 'what to do about this'
+
+=head2 Commands Directory
+
+In addition to a L</Commands File>, you can also put your commands inside
+a directory. This directory can be set with option C<-d|--commands-dir>.
+
+Each file in the directory ending in C<.sh> will be considered a command
+to include in the list. The label in the list will be derived from the
+filename:
+
+=over
+
+=item *
+
+An initial sequence of digits and a following dash or space character are
+removed. This allows you to set an order in which you want to show the
+commands in the list.
+
+=item *
+
+the trailing C<.sh> is removed.
+
+=back
+
+=head2 Environment File
+
+You can optionally designate a file to contain environment variables.
+Actually, it can contain any command. When it has contents, it will be
+pre-pended to the execution of any command.
+
+You can set it with option C<-e|--env>.
+
+=head2 Shell
+
+The defaut shell that is invoked to run commands is C</bin/sh>, you can
+set a different one with C<-s|--shell>. Whatever you select, it must
+support running commands as a single string provided through the C<-c>
+command line option.
+
+=head2 Practical Usage
+
+When you start C<useshowcase>, it will initially load commands from either
+a file or a directory (or both), then show you a window with two parts:
+
+=over
+
+=item *
+
+the list of commands and generic actions that can be performed
+
+=item *
+
+an editor for commands
+
+=back
+
+Use arrow keys to move in the list; use the I<Tab> key to switch to the
+editor and then back to the list.
+
+When an item is selected on the list, the associated command is shown in
+the editor. Pressing I<Enter> will run the command (pre-pending the
+environment if it is not empty).
+
+You can edit commands by hitting the I<Tab> key; in this case, the command
+that will be executed is the one you modified. You can set the editor's
+height via command-line option C<-E|--editor-height>.
+
+If you want to save your changes, use the relevant line in the list.
+Changes to the environment are always saved automatically.
+
+You can also save the full history of commands you run in a file, use the
+relevant line in the list. The filename can be set using the
+C<-H|--history> option; by default a name based on the timestamp is
+generated automatically.
+
+=head2 Compatibility Mode
+
+By default, the program is run in I<compatibility mode>, which means that
+the borders around the sub-windows are pretty basic. You can disable this
+mode using option C<--no-compat>, just avoid it if you see that the
+borders are garbled.
+
+=head1 OPTIONS
+
+=over
+
+=item C<-c|--commands filename>
+
+set name of YAML file to take commands from. By default it is
+C<commands.usc>.
+
+=item C<-d|--commands-dir dirname>
+
+set name of directory to take commands from.
+
+=item C<--no-compat>
+
+disable compatibility mode and try to show better window borders.
+
+=item C<-e|--env|--env-file filename>
+
+set filename of the environment file. If not present, a temporary file
+will be created and removed upon exit.
+
+=item C<-E|--editor-height integer>
+
+set height of the editor section in the user interface.
+
+=item C<-H|--history filename>
+
+set the name of a file to save history, when requested. By default a file
+name is generated based on the timestamp at the beginning of the program.
+
+=item C<-s|--shell filename>
+
+set the shell to use, by default C</bin/sh>. The shell MUST support the
+C<-c> option.
+
+=back
+
+=head1 DEPENDENCIES
+
+See associated C<cpanfile> in repository at
+https://github.com/polettix/usecaseshow
+
+=head1 BUGS AND LIMITATIONS
+
+Please report any bugs or feature requests through
+https://github.com/polettix/usecaseshow
+
+=head1 AUTHOR
+
+Flavio Poletti C<flavio@polettix.it>
+
+=head1 LICENCE AND COPYRIGHT
+
+Copyright (c) 2019 Flavio Poletti C<flavio@polettix.it>.
+
+This module is free software.  You can redistribute it and/or
+modify it under the terms of the Artistic License 2.0.
+
+This program is distributed in the hope that it will be useful,
+but without any warranty; without even the implied warranty of
+merchantability or fitness for a particular purpose.
+
+=cut
