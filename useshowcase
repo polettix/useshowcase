@@ -84,10 +84,7 @@ $list = $win->add(
       if ($action eq 'quit') { exit 0 }
       elsif ($action eq 'save-history') {
          open my $fh, '>', $config{history};
-         for my $i (0 .. $#history) {
-            say {$fh} '# ', $i + 1, ' ', '#' x (69 - length $i);
-            say {$fh} $history[$i];
-         }
+         printout($fh, $_) for @history;
          close $fh;
       } ## end elsif ($action eq 'save-history')
       elsif ($action eq 'save') {
@@ -97,11 +94,9 @@ $list = $win->add(
          (my $has_env = $config{env}{command}) =~ s{\s+}{}gmxs;
          my $cmd = ($has_env ? $config{env}{command} . "\n" : '')
             . $item->{command};
-         push @history, $cmd;
+         push @history, [1 + @history, $cmd];
          $cui->leave_curses;
-         say '#' x 72;
-         say "# $_" for split m{\n}mxs, $cmd;
-         say '#' x 42;
+         printout(\*STDOUT, $history[-1]);
          system $config{shell}, '-c', $cmd;
          scalar <STDIN>;
          $cui->reset_curses;
@@ -265,6 +260,17 @@ sub default_commands ($config) {
       {label => '[q]uit',                     action => 'quit'},
    );
 } ## end sub default_commands
+
+sub printout ($fh, $cmd) {
+   my ($i, $outcome) = $cmd->@*;
+   my $num = "# $i #";
+   my $fill = '#' x (72 - length $num);
+   say {$fh} '' if $i;
+   say {$fh} $num, $fill;
+   say {$fh} $outcome;
+   say {$fh} $fill, $num;
+   return;
+}
 
 __END__
 
